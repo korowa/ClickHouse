@@ -1,4 +1,6 @@
 #include <Interpreters/ProcessorsProfileLog.h>
+#include "Common/Logger.h"
+#include "Common/logger_useful.h"
 #include <Common/FieldVisitorToString.h>
 
 #include <Columns/ColumnNullable.h>
@@ -1203,6 +1205,9 @@ IdentifierResolveResult QueryAnalyzer::tryResolveIdentifierFromAliases(const Ide
             identifier_bind_part,
             scope.scope_node->formatASTForErrorMessage());
 
+    /// Checking if alias node is already resolved expression before cloning it
+    const bool is_resolved_expression = resolved_expressions.contains(alias_node);
+
     auto node_type = alias_node->getNodeType();
     if (!identifier_lookup.isTableExpressionLookup())
     {
@@ -1244,7 +1249,7 @@ IdentifierResolveResult QueryAnalyzer::tryResolveIdentifierFromAliases(const Ide
 
         alias_node = lookup_result.resolved_identifier;
     }
-    else if (node_type == QueryTreeNodeType::FUNCTION)
+    else if (node_type == QueryTreeNodeType::FUNCTION && !is_resolved_expression)
     {
         resolveExpressionNode(alias_node, *scope_to_resolve_alias_expression, false /*allow_lambda_expression*/, false /*allow_table_expression*/);
     }
@@ -3726,6 +3731,7 @@ ProjectionNames QueryAnalyzer::resolveExpressionNode(
     }
     else
     {
+        LOG_INFO(getLogger("Query analyzer"), "Resolving node with alias {}, ignored: {}", node_alias, ignore_alias);
         result_projection_names.push_back(node_alias);
         /// Remove alias later. This needed to produce the same query tree subtree
         /// for expressions with aliaes to subexpression. Example:
@@ -4005,6 +4011,12 @@ ProjectionNames QueryAnalyzer::resolveExpressionNode(
             if (scope_ptr->scope_node->getNodeType() == QueryTreeNodeType::QUERY)
                 break;
         }
+    }
+
+    if(!node_alias.empty())
+    {
+        scope.aliases.alias_name_to_expression_node[node_alias] = node;
+        LOG_INFO(getLogger("QueryAnalyzer"), "Completed resolving node with allias {}", node_alias);
     }
 
     resolved_expressions.emplace(node, result_projection_names);
