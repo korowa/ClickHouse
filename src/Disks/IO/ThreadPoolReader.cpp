@@ -113,7 +113,7 @@ std::future<IAsynchronousReader::Result> ThreadPoolReader::submit(Request reques
     /// disable pread with nowait.
     static const bool has_pread_nowait_support = !hasBugInPreadV2();
 
-    if (has_pread_nowait_support)
+    if (has_pread_nowait_support && !request.direct_io)
     {
         /// It reports real time spent including the time spent while thread was preempted doing nothing.
         /// And it is Ok for the purpose of this watch (it is used to lower the number of threads to read from tables).
