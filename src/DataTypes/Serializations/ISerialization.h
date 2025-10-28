@@ -67,6 +67,7 @@ public:
         SPARSE = 1,
         DETACHED = 2,
         REPLICATED = 3,
+        RLE = 4,
     };
 
     /// We can have multiple serialization kinds created over each other.
@@ -242,6 +243,9 @@ public:
             ObjectStructure,
 
             Regular,
+
+            RLEValues,
+            RLESizes,
         };
 
         /// Types of substreams that can have arbitrary name.

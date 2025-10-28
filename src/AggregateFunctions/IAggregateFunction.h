@@ -1,6 +1,7 @@
 #pragma once
 
 #include <AggregateFunctions/IAggregateFunction_fwd.h>
+#include <Columns/ColumnRLE.h>
 #include <Columns/ColumnSparse.h>
 #include <Columns/ColumnTuple.h>
 #include <Columns/ColumnsNumber.h>
@@ -243,6 +244,15 @@ public:
         const IColumn ** columns,
         Arena * arena) const = 0;
 
+    /// The version of "addBatch", that handle RLE columns as arguments.
+    virtual void addBatchRLE(
+        size_t row_begin,
+        size_t row_end,
+        AggregateDataPtr * places,
+        size_t place_offset,
+        const IColumn ** columns,
+        Arena * arena) const = 0;
+
     virtual void mergeBatch(
         size_t row_begin,
         size_t row_end,
@@ -265,6 +275,14 @@ public:
 
     /// The version of "addBatchSinglePlace", that handle sparse columns as arguments.
     virtual void addBatchSparseSinglePlace(
+        size_t row_begin,
+        size_t row_end,
+        AggregateDataPtr __restrict place,
+        const IColumn ** columns,
+        Arena * arena) const = 0;
+
+    /// The version of "addBatchSinglePlace", that handle RLE columns as arguments.
+    virtual void addBatchRLESinglePlace(
         size_t row_begin,
         size_t row_end,
         AggregateDataPtr __restrict place,
@@ -505,6 +523,34 @@ public:
                                                         &values, offset_it.getValueIndex(), arena);
     }
 
+    void addBatchRLE(
+        size_t row_begin,
+        size_t row_end,
+        AggregateDataPtr * places,
+        size_t place_offset,
+        const IColumn ** columns,
+        Arena * arena) const override
+    {
+        const auto & column_rle = assert_cast<const ColumnRLE &>(*columns[0]);
+        const auto * values = &column_rle.getValuesColumn();
+        const auto & offsets_data = column_rle.getOffsetsData();
+
+        size_t run_idx = column_rle.getValueIndex(row_begin);
+        size_t current_row = row_begin;
+
+        while (current_row < row_end && run_idx < offsets_data.size())
+        {
+            const size_t run_end_row = offsets_data[run_idx];
+            const size_t process_end_row = std::min(run_end_row + 1, row_end);
+            for (; current_row < process_end_row; ++current_row)
+            {
+                if (places[current_row])
+                    static_cast<const Derived *>(this)->add(places[current_row] + place_offset, &values, run_idx, arena);
+            }
+            ++run_idx;
+        }
+    }
+
     void mergeBatch(
         size_t row_begin,
         size_t row_end,
@@ -583,6 +629,30 @@ public:
             static_cast<const Derived *>(this)->addBatchSinglePlace(from, to, place, &values, arena, -1);
         if (num_defaults > 0)
             static_cast<const Derived *>(this)->addManyDefaults(place, &values, num_defaults, arena);
+    }
+
+    void addBatchRLESinglePlace(
+        size_t row_begin,
+        size_t row_end,
+        AggregateDataPtr __restrict place,
+        const IColumn ** columns,
+        Arena * arena) const override
+    {
+        const auto & column_rle = assert_cast<const ColumnRLE &>(*columns[0]);
+        const auto * values = &column_rle.getValuesColumn();
+        const auto & offsets_data = column_rle.getOffsetsData();
+
+        size_t run_idx = column_rle.getValueIndex(row_begin);
+        size_t current_row = row_begin;
+
+        while (current_row < row_end && run_idx < offsets_data.size())
+        {
+            const size_t run_end_row = offsets_data[run_idx];
+            const size_t process_end_row = std::min(run_end_row + 1, row_end);
+            for (; current_row < process_end_row; ++current_row)
+                static_cast<const Derived *>(this)->add(place, &values, run_idx, arena);
+            ++run_idx;
+        }
     }
 
     void addBatchSinglePlaceNotNull( /// NOLINT

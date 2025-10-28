@@ -12,6 +12,7 @@ namespace MergeTreeSetting
     extern const MergeTreeSettingsFloat ratio_of_defaults_for_sparse_serialization;
     extern const MergeTreeSettingsMergeTreeSerializationInfoVersion serialization_info_version;
     extern const MergeTreeSettingsMergeTreeStringSerializationVersion string_serialization_version;
+    extern const MergeTreeSettingsString rle_columns;
 }
 
 IMergedBlockOutputStream::IMergedBlockOutputStream(
@@ -30,6 +31,7 @@ IMergedBlockOutputStream::IMergedBlockOutputStream(
         false,
         (*storage_settings)[MergeTreeSetting::serialization_info_version],
         (*storage_settings)[MergeTreeSetting::string_serialization_version],
+        (*storage_settings)[MergeTreeSetting::rle_columns],
     }
     , new_serialization_infos(info_settings)
 {

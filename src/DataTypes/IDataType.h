@@ -141,6 +141,8 @@ public:
     virtual bool supportsSparseSerialization() const { return !haveSubtypes(); }
     virtual bool canBeInsideSparseColumns() const { return supportsSparseSerialization(); }
 
+    virtual bool supportsRLESerialization() const { return supportsSparseSerialization() && canBeInsideSparseColumns(); }
+
     SerializationPtr getDefaultSerialization(SerializationPtr override_default = {}) const;
 
     /// Chooses serialization according to serialization kind stack.

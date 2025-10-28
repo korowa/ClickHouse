@@ -1260,6 +1260,7 @@ class MergeTreeSettingsRandomizer:
         "serialization_info_version": lambda: random.choice(["basic", "with_types"]),
         "string_serialization_version": lambda: random.choice(["single_stream", "with_size_stream"]),
         "enable_shared_storage_snapshot_in_query": lambda: random.randint(0, 1),
+        "rle_columns": lambda: random.choice(["ALL"]),
     }
 
     @staticmethod

@@ -1,3 +1,4 @@
+#include <Columns/ColumnRLE.h>
 #include <IO/ReadHelpers.h>
 #include <IO/WriteBufferFromString.h>
 #include <DataTypes/DataTypeEnum.h>
@@ -100,6 +101,13 @@ void DataTypeEnum<Type>::insertDefaultInto(IColumn & column) const
             sparse_column->insertDefault();
         else
             sparse_column->insert(default_value);
+    }
+    else if (auto * rle_column = typeid_cast<ColumnRLE *>(&column))
+    {
+        if (default_value == Type{})
+            rle_column->insertDefault();
+        else
+            rle_column->insert(default_value);
     }
     else
     {

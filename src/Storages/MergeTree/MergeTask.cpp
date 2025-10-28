@@ -129,6 +129,7 @@ namespace MergeTreeSetting
     extern const MergeTreeSettingsUInt64Auto merge_max_dynamic_subcolumns_in_wide_part;
     extern const MergeTreeSettingsMergeTreeSerializationInfoVersion serialization_info_version;
     extern const MergeTreeSettingsMergeTreeStringSerializationVersion string_serialization_version;
+    extern const MergeTreeSettingsString rle_columns;
 }
 
 namespace ErrorCodes
@@ -574,6 +575,7 @@ bool MergeTask::ExecuteAndFinalizeHorizontalPart::prepare() const
         true,
         (*merge_tree_settings)[MergeTreeSetting::serialization_info_version],
         (*merge_tree_settings)[MergeTreeSetting::string_serialization_version],
+        (*merge_tree_settings)[MergeTreeSetting::rle_columns],
     };
 
     SerializationInfoByName infos(global_ctx->storage_columns, info_settings);

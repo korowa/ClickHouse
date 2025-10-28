@@ -76,6 +76,8 @@ public:
     const Data & getData() const { return data; }
     ISerialization::KindStack getKindStack() const { return kind_stack; }
 
+    bool shouldChooseKind() const;
+
     static ISerialization::KindStack chooseKindStack(const Data & data, const SerializationInfoSettings & settings);
 
 protected:

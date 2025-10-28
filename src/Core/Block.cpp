@@ -1,6 +1,7 @@
 #include <AggregateFunctions/IAggregateFunction.h>
 #include <Columns/ColumnAggregateFunction.h>
 #include <Columns/ColumnConst.h>
+#include <Columns/ColumnRLE.h>
 #include <Columns/ColumnSparse.h>
 #include <Columns/ColumnReplicated.h>
 #include <Core/Block.h>
@@ -58,6 +59,9 @@ static const IColumn * getActualColumn(const IColumn * column)
 
     if (const auto * column_sparse = typeid_cast<const ColumnSparse *>(column))
         return getActualColumn(&column_sparse->getValuesColumn());
+
+    if (const auto * column_rle = typeid_cast<const ColumnRLE *>(column))
+        return getActualColumn(&column_rle->getValuesColumn());
 
     return actual_column;
 }

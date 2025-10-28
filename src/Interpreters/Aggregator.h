@@ -206,6 +206,7 @@ public:
         const IColumn ** batch_arguments{};
         const UInt64 * offsets{};
         bool has_sparse_arguments = false;
+        bool has_rle_arguments = false;
         bool can_optimize_equal_keys_ranges = true;
     };
 

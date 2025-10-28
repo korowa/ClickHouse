@@ -874,7 +874,7 @@ void Aggregator::createAggregateStates(AggregateDataPtr & aggregate_data) const
 bool Aggregator::hasSparseArguments(AggregateFunctionInstruction * aggregate_instructions)
 {
     for (auto * inst = aggregate_instructions; inst->that; ++inst)
-        if (inst->has_sparse_arguments)
+        if (inst->has_sparse_arguments || inst->has_rle_arguments)
             return true;
     return false;
 }
@@ -1466,6 +1466,12 @@ void Aggregator::addBatch(
             inst->state_offset,
             inst->batch_arguments,
             arena);
+    else if (inst->has_rle_arguments)
+        inst->batch_that->addBatchRLE(
+            row_begin, row_end, places,
+            inst->state_offset,
+            inst->batch_arguments,
+            arena);
     else
         inst->batch_that->addBatch(
             row_begin, row_end, places,
@@ -1490,6 +1496,11 @@ void Aggregator::addBatchSinglePlace(
             arena);
     else if (inst->has_sparse_arguments)
         inst->batch_that->addBatchSparseSinglePlace(
+            row_begin, row_end, place,
+            inst->batch_arguments,
+            arena);
+    else if (inst->has_rle_arguments)
+        inst->batch_that->addBatchRLESinglePlace(
             row_begin, row_end, place,
             inst->batch_arguments,
             arena);
@@ -1562,8 +1573,9 @@ void Aggregator::prepareAggregateInstructions(
 
     for (size_t i = 0; i < params.aggregates_size; ++i)
     {
-        bool allow_sparse_arguments = aggregate_columns[i].size() == 1;
+        bool allow_encoded_arguments = aggregate_columns[i].size() == 1;
         bool has_sparse_arguments = false;
+        bool has_rle_arguments = false;
 
         for (size_t j = 0; j < aggregate_columns[i].size(); ++j)
         {
@@ -1574,9 +1586,9 @@ void Aggregator::prepareAggregateInstructions(
             /// Sparse columns without defaults may be handled incorrectly.
             if (aggregate_columns[i][j]->isSparse()
                 && aggregate_columns[i][j]->getNumberOfDefaultRows() == 0)
-                allow_sparse_arguments = false;
+                allow_encoded_arguments = false;
 
-            auto full_column = allow_sparse_arguments
+            auto full_column = allow_encoded_arguments
                 ? aggregate_columns[i][j]->getPtr()
                 : recursiveRemoveSparse(aggregate_columns[i][j]->getPtr());
 
@@ -1589,9 +1601,13 @@ void Aggregator::prepareAggregateInstructions(
 
             if (aggregate_columns[i][j]->isSparse())
                 has_sparse_arguments = true;
+
+            if (aggregate_columns[i][j]->isRLE())
+                has_rle_arguments = true;
         }
 
         aggregate_functions_instructions[i].has_sparse_arguments = has_sparse_arguments;
+        aggregate_functions_instructions[i].has_rle_arguments = has_rle_arguments;
         aggregate_functions_instructions[i].can_optimize_equal_keys_ranges = aggregate_functions[i]->canOptimizeEqualKeysRanges();
         aggregate_functions_instructions[i].arguments = aggregate_columns[i].data();
         aggregate_functions_instructions[i].state_offset = offsets_of_aggregate_states[i];

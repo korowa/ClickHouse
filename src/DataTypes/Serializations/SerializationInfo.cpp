@@ -1,3 +1,4 @@
+#include <DataTypes/Serializations/ISerialization.h>
 #include <DataTypes/Serializations/SerializationInfo.h>
 
 #include <Columns/ColumnSparse.h>
@@ -77,24 +78,29 @@ SerializationInfo::SerializationInfo(ISerialization::KindStack kind_stack_, cons
 {
 }
 
+bool SerializationInfo::shouldChooseKind() const
+{
+    return settings.choose_kind && !ISerialization::hasKind(kind_stack, ISerialization::Kind::RLE);
+}
+
 void SerializationInfo::add(const IColumn & column)
 {
     data.add(column);
-    if (settings.choose_kind)
+    if (shouldChooseKind())
         kind_stack = chooseKindStack(data, settings);
 }
 
 void SerializationInfo::add(const SerializationInfo & other)
 {
     data.add(other.data);
-    if (settings.choose_kind)
+    if (shouldChooseKind())
         kind_stack = chooseKindStack(data, settings);
 }
 
 void SerializationInfo::remove(const SerializationInfo & other)
 {
     data.remove(other.data);
-    if (settings.choose_kind)
+    if (shouldChooseKind())
         kind_stack = chooseKindStack(data, settings);
 }
 
@@ -102,7 +108,7 @@ void SerializationInfo::remove(const SerializationInfo & other)
 void SerializationInfo::addDefaults(size_t length)
 {
     data.addDefaults(length);
-    if (settings.choose_kind)
+    if (shouldChooseKind())
         kind_stack = chooseKindStack(data, settings);
 }
 
@@ -298,7 +304,14 @@ SerializationInfoByName::SerializationInfoByName(const NamesAndTypesList & colum
 
     for (const auto & column : columns)
     {
-        if (column.type->supportsSparseSerialization())
+        const bool is_rle_column = column.type->supportsRLESerialization() && (settings.rle_columns.contains(column.name) || settings.rle_columns_all);
+        if (is_rle_column)
+        {
+            auto info = column.type->createSerializationInfo(settings);
+            info->setKindStack(ISerialization::KindStack{ISerialization::Kind::DEFAULT, ISerialization::Kind::RLE});
+            emplace(column.name, info);
+        }
+        else if (column.type->supportsSparseSerialization())
             emplace(column.name, column.type->createSerializationInfo(settings));
     }
 }
@@ -490,7 +503,8 @@ SerializationInfoByName SerializationInfoByName::readJSONFromString(const NamesA
         1.0 /* Doesn't matter when constructing from JSON */,
         false /* Cannot choose kind when constructing from JSON */,
         version,
-        string_serialization_version);
+        string_serialization_version,
+        "");
 
     SerializationInfoByName infos(settings);
     if (columns_array)

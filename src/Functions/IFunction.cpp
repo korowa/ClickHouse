@@ -1,3 +1,5 @@
+#include <Columns/ColumnRLE.h>
+#include <Columns/IColumn.h>
 #include <Functions/FunctionDynamicAdaptor.h>
 
 #include <Columns/ColumnConst.h>
@@ -504,18 +506,25 @@ ColumnPtr IExecutableFunction::executeWithoutReplicatedColumns(
     if (result_type->getTypeId() != TypeIndex::Function && use_default_implementation_for_sparse_columns)
     {
         size_t num_sparse_columns = 0;
+        size_t num_rle_columns = 0;
         size_t num_full_columns = 0;
         size_t sparse_column_position = 0;
 
         for (size_t i = 0; i < arguments.size(); ++i)
         {
             const auto * column_sparse = checkAndGetColumn<ColumnSparse>(arguments[i].column.get());
+            const auto * column_rle = checkAndGetColumn<ColumnRLE>(arguments[i].column.get());
             /// In rare case, when sparse column doesn't have default values,
             /// it's more convenient to convert it to full before execution of function.
             if (column_sparse && column_sparse->getNumberOfDefaultRows())
             {
                 sparse_column_position = i;
                 ++num_sparse_columns;
+            }
+            else if (column_rle)
+            {
+                sparse_column_position = i;
+                ++num_rle_columns;
             }
             else if (!isColumnConst(*arguments[i].column))
             {
@@ -559,6 +568,33 @@ ColumnPtr IExecutableFunction::executeWithoutReplicatedColumns(
             }
 
             return ColumnSparse::create(res, sparse_offsets, input_rows_count);
+        }
+        else if (num_rle_columns == 1 && num_full_columns == 0 && result_type->canBeInsideSparseColumns())
+        {
+            auto & arg_with_rle = columns_without_sparse[sparse_column_position];
+            ColumnPtr rle_offsets;
+            {
+                /// New scope to avoid possible mistakes on dangling reference.
+                const auto & column_rle = assert_cast<const ColumnRLE &>(*arg_with_rle.column);
+                rle_offsets = column_rle.getOffsetsPtr();
+                arg_with_rle.column = column_rle.getValuesPtr();
+            }
+
+            size_t values_size = arg_with_rle.column->size();
+            for (size_t i = 0; i < columns_without_sparse.size(); ++i)
+            {
+                if (i == sparse_column_position)
+                    continue;
+
+                columns_without_sparse[i].column = columns_without_sparse[i].column->cloneResized(values_size);
+            }
+
+            auto res = executeWithoutSparseColumns(columns_without_sparse, result_type, values_size, dry_run);
+
+            if (isColumnConst(*res))
+                return res->cloneResized(input_rows_count);
+
+            return ColumnRLE::create(res, rle_offsets);
         }
 
         convertSparseColumnsToFull(columns_without_sparse);

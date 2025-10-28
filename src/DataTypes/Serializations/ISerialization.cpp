@@ -1,4 +1,5 @@
 #include <Columns/ColumnBLOB.h>
+#include <Columns/ColumnRLE.h>
 #include <Columns/ColumnSparse.h>
 #include <Columns/ColumnReplicated.h>
 #include <Columns/IColumn.h>
@@ -53,6 +54,13 @@ ISerialization::KindStack ISerialization::getKindStack(const IColumn & column)
         return kind_stack;
     }
 
+    if (const auto * column_rle = typeid_cast<const ColumnRLE *>(&column))
+    {
+        auto kind_stack = getKindStack(*column_rle->getValuesPtr());
+        kind_stack.push_back(Kind::RLE);
+        return kind_stack;
+    }
+
     return {Kind::DEFAULT};
 }
 
@@ -68,6 +76,8 @@ static String kindToString(ISerialization::Kind kind)
             return "Detached";
         case ISerialization::Kind::REPLICATED:
             return "Replicated";
+        case ISerialization::Kind::RLE:
+            return "RLE";
     }
 }
 
@@ -101,6 +111,8 @@ static ISerialization::Kind stringToKind(const String & str)
         return ISerialization::Kind::DETACHED;
     else if (str == "Replicated")
         return ISerialization::Kind::REPLICATED;
+    else if (str == "RLE")
+        return ISerialization::Kind::RLE;
     throw Exception(ErrorCodes::LOGICAL_ERROR, "Unknown serialization kind '{}'", str);
 }
 
@@ -284,6 +296,8 @@ String getNameForSubstreamPath(
             stream_name += ".sparse";
         else if (it->type == Substream::SparseOffsets)
             stream_name += ".sparse.idx";
+        else if (it->type == Substream::RLESizes)
+            stream_name += ".rle.idx";
         else if (it->type == Substream::ReplicatedElements)
             stream_name += ".repl";
         else if (it->type == Substream::ReplicatedIndexes)
@@ -505,7 +519,8 @@ bool ISerialization::isSpecialCompressionAllowed(const SubstreamPath & path)
             || elem.type == Substream::ArraySizes
             || elem.type == Substream::StringSizes
             || elem.type == Substream::DictionaryIndexes
-            || elem.type == Substream::SparseOffsets)
+            || elem.type == Substream::SparseOffsets
+            || elem.type == Substream::RLESizes)
             return false;
     }
     return true;

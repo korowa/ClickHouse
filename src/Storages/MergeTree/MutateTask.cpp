@@ -1,3 +1,4 @@
+#include <DataTypes/Serializations/ISerialization.h>
 #include <Storages/MergeTree/MutateTask.h>
 
 #include <Disks/SingleDiskVolume.h>
@@ -80,6 +81,7 @@ namespace MergeTreeSetting
     extern const MergeTreeSettingsBool columns_and_secondary_indices_sizes_lazy_calculation;
     extern const MergeTreeSettingsMergeTreeSerializationInfoVersion serialization_info_version;
     extern const MergeTreeSettingsMergeTreeStringSerializationVersion string_serialization_version;
+    extern const MergeTreeSettingsString rle_columns;
 }
 
 namespace ErrorCodes
@@ -526,6 +528,7 @@ getColumnsForNewDataPart(
         false,
         (*source_part->storage.getSettings())[MergeTreeSetting::serialization_info_version],
         (*source_part->storage.getSettings())[MergeTreeSetting::string_serialization_version],
+        (*source_part->storage.getSettings())[MergeTreeSetting::rle_columns],
     };
 
     SerializationInfoByName new_serialization_infos(settings);
@@ -562,6 +565,20 @@ getColumnsForNewDataPart(
 
         new_info = old_info->createWithType(*old_type, *new_type, settings);
         new_serialization_infos.emplace(new_name, std::move(new_info));
+    }
+
+    // Explicitly add RLE serialization if required to keep serialization infos in sync with part serializations
+    // written due to `reset_columns = true` in MergedBlockOutputStream
+    if (!settings.rle_columns.empty() || settings.rle_columns_all)
+    {
+        SerializationInfoByName rle_serialization_infos(updated_header.getNamesAndTypesList(), settings);
+        for (const auto & [name, info] : rle_serialization_infos)
+        {
+            if(!new_serialization_infos.tryGet(name) && ISerialization::hasKind(info->getKindStack(), ISerialization::Kind::RLE))
+            {
+                new_serialization_infos.emplace(name, info);
+            }
+        }
     }
 
     /// In compact parts we read all columns, because they all stored in a single file
