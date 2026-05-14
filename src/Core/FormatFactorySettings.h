@@ -1188,6 +1188,9 @@ Where in the parquet file to place the bloom filters. Bloom filters will be writ
   * if greater than the total size of all bloom filters, bloom filters for all row groups will be accumulated in memory, then written together near the end of the file,
   * otherwise, bloom filters will be accumulated in memory and written out whenever their total size goes above this value.
 )", 0) \
+    DECLARE(UInt64, output_format_parquet_bloom_filter_adaptive_sample_size, 65536, R"(
+TBD
+)", 0) \
     DECLARE(Bool, output_format_parquet_datetime_as_uint32, false, R"(
 Write DateTime values as raw unix timestamp (read back as UInt32), instead of converting to milliseconds (read back as DateTime64(3)).
 )", 0) \

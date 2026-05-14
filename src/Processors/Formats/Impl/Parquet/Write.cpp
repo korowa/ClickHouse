@@ -1,3 +1,4 @@
+#include <vector>
 #include <Processors/Formats/Impl/Parquet/Write.h>
 #include <Processors/Formats/Impl/Parquet/ThriftUtil.h>
 #include <arrow/util/key_value_metadata.h>
@@ -747,6 +748,83 @@ void writePage(const parq::PageHeader & header, const PODArray<char> & compresse
     s.column_chunk.meta_data.total_compressed_size += compressed_page_size;
 }
 
+size_t initBloomFilter(size_t size, ColumnChunkIndexes & indexes, const WriteOptions & options)
+{
+    double requested_num_blocks = static_cast<double>(size) * options.bloom_filter_bits_per_value / 256;
+    size_t num_blocks = 1;
+    while (static_cast<double>(num_blocks) < requested_num_blocks)
+    {
+        if (num_blocks >= 4 * 1024 * 1024)
+            return 0;
+        num_blocks *= 2;
+    }
+
+    indexes.bloom_filter_data.reserve_exact(num_blocks * 8);
+    indexes.bloom_filter_data.resize_fill(num_blocks * 8);
+
+    return num_blocks;
+}
+
+void updateBloomFilter(const std::vector<UInt64> & hashes, ColumnChunkIndexes & indexes, size_t num_blocks)
+{
+    static constexpr UInt32 salt[8] = {
+        0x47b6137bU, 0x44974d91U, 0x8824ad5bU, 0xa2b7289dU, 0x705495c7U, 0x2df1424bU, 0x9efc4947U, 0x5c6bfb31U};
+
+    PODArray<UInt32> & data = indexes.bloom_filter_data;
+    for (const auto & h : hashes)
+    {
+        size_t block_idx = ((h >> 32) * num_blocks) >> 32;
+        chassert(block_idx < num_blocks);
+        UInt32 x = UInt32(h); // overflow to take the lower 32 bits
+        for (size_t word_idx = 0; word_idx < 8; ++word_idx)
+        {
+            UInt32 y = x * salt[word_idx]; // overflow to take the lower 32 bits
+            size_t bit_idx = y >> 27;
+            data[block_idx * 8 + word_idx] |= 1u << bit_idx;
+        }
+    }
+}
+
+void updateBloomFilter(const HashSet<UInt64, TrivialHash> & hashes, ColumnChunkIndexes & indexes, size_t num_blocks)
+{
+    static constexpr UInt32 salt[8] = {
+        0x47b6137bU, 0x44974d91U, 0x8824ad5bU, 0xa2b7289dU, 0x705495c7U, 0x2df1424bU, 0x9efc4947U, 0x5c6bfb31U};
+
+    PODArray<UInt32> & data = indexes.bloom_filter_data;
+    for (const auto & cell : hashes)
+    {
+        size_t h = cell.key;
+        size_t block_idx = ((h >> 32) * num_blocks) >> 32;
+        chassert(block_idx < num_blocks);
+        UInt32 x = UInt32(h);
+        for (size_t word_idx = 0; word_idx < 8; ++word_idx)
+        {
+            UInt32 y = x * salt[word_idx];
+            size_t bit_idx = y >> 27;
+            data[block_idx * 8 + word_idx] |= 1u << bit_idx;
+        }
+    }
+}
+
+void writeBloomFilter(ColumnChunkIndexes & indexes)
+{
+    PODArray<UInt32> & data = indexes.bloom_filter_data;
+
+    /// Fill out the paperwork.
+    auto & header = indexes.bloom_filter_header;
+    header.__set_numBytes(Int32(data.size() * sizeof(data[0])));
+    parq::BloomFilterAlgorithm alg;
+    alg.__set_BLOCK(parq::SplitBlockAlgorithm());
+    header.__set_algorithm(alg);
+    parq::BloomFilterHash hash;
+    hash.__set_XXHASH(parq::XxHash());
+    header.__set_hash(hash);
+    parq::BloomFilterCompression comp;
+    comp.__set_UNCOMPRESSED(parq::Uncompressed());
+    header.__set_compression(comp);
+}
+
+[[maybe_unused]]
 void makeBloomFilter(const HashSet<UInt64, TrivialHash> & hashes, ColumnChunkIndexes & indexes, const WriteOptions & options)
 {
     /// Format documentation: https://parquet.apache.org/docs/file-format/bloomfilter/
@@ -863,12 +941,77 @@ void writeColumnImpl(
     PODArray<char> encoded;
     PODArray<char> compressed_maybe;
 
-    /// Hash set to deduplicate the values before calculating bloom filter size.
-    /// Possible future optimization: if using dictionary encoding, take already-deduplicated values
-    /// from the dictionary instead.
     std::optional<HashSet<UInt64, TrivialHash>> hashes_for_bloom_filter;
+    size_t bloom_filter_sampled_values = 0;
     if (options.write_bloom_filter)
-        hashes_for_bloom_filter.emplace(); // allocates memory for initial size
+        hashes_for_bloom_filter.emplace();
+
+    size_t bloom_filter_num_blocks = 0;
+    const bool bloom_filter_sampling_enabled = options.bloom_filter_adaptive_sample_size != 0;
+
+    auto is_sampling_bloom_filter = [&]
+    {
+        return bloom_filter_sampling_enabled
+            && hashes_for_bloom_filter.has_value()
+            && bloom_filter_sampled_values < options.bloom_filter_adaptive_sample_size;
+    };
+
+    auto is_dedup_bloom_filter = [&]
+    {
+        return hashes_for_bloom_filter.has_value()
+            && (!bloom_filter_sampling_enabled || bloom_filter_sampled_values >= options.bloom_filter_adaptive_sample_size);
+    };
+
+    auto is_direct_bloom_filter = [&]
+    {
+        return !hashes_for_bloom_filter.has_value() && bloom_filter_num_blocks != 0;
+    };
+
+    auto reset_bloom_filter_state = [&]
+    {
+        bloom_filter_num_blocks = 0;
+        bloom_filter_sampled_values = 0;
+        hashes_for_bloom_filter.reset();
+        if (options.write_bloom_filter)
+            hashes_for_bloom_filter.emplace();
+    };
+
+    auto finalize_bloom_filter_sampling = [&]
+    {
+        if (!hashes_for_bloom_filter.has_value() || bloom_filter_num_blocks != 0)
+            return;
+
+        if (!bloom_filter_sampling_enabled)
+            return;
+
+        if (bloom_filter_sampled_values < options.bloom_filter_adaptive_sample_size)
+            return;
+
+        auto calculate_num_blocks = [&](size_t size)
+        {
+            double requested_num_blocks = static_cast<double>(size) * options.bloom_filter_bits_per_value / 256;
+            size_t num_blocks = 1;
+            while (static_cast<double>(num_blocks) < requested_num_blocks)
+            {
+                if (num_blocks >= 4 * 1024 * 1024)
+                    return size_t(0);
+                num_blocks *= 2;
+            }
+            return num_blocks;
+        };
+
+        size_t sampled_seen_num_blocks = calculate_num_blocks(bloom_filter_sampled_values);
+        size_t sampled_unique_num_blocks = calculate_num_blocks(hashes_for_bloom_filter->size());
+
+        if (sampled_seen_num_blocks == sampled_unique_num_blocks)
+        {
+            bloom_filter_num_blocks = initBloomFilter(num_values, s.indexes, options);
+            if (bloom_filter_num_blocks)
+                updateBloomFilter(*hashes_for_bloom_filter, s.indexes, bloom_filter_num_blocks);
+
+            hashes_for_bloom_filter.reset();
+        }
+    };
 
     /// Start of current page.
     size_t def_offset = 0; // index in def and rep
@@ -1058,8 +1201,10 @@ void writeColumnImpl(
                 for (size_t i = 0; i < data_count; ++i)
                     page_statistics.add(converted[i]);
 
-            if (hashes_for_bloom_filter.has_value())
+            if (hashes_for_bloom_filter.has_value() || bloom_filter_num_blocks != 0)
             {
+                std::vector<UInt64> hashes;
+                hashes.reserve(data_count);
                 for (size_t i = 0; i < data_count; ++i)
                 {
                     UInt64 h;
@@ -1073,7 +1218,28 @@ void writeColumnImpl(
                         static_assert(sizeof(converted[i]) <= 12, "unexpected non-primitive type");
                         h = XXH64(reinterpret_cast<const void*>(&converted[i]), sizeof(converted[i]), seed);
                     }
-                    hashes_for_bloom_filter->insert(h);
+                    hashes.push_back(h);
+                }
+
+                if (is_sampling_bloom_filter())
+                {
+                    chassert(hashes_for_bloom_filter.has_value());
+                    bloom_filter_sampled_values += hashes.size();
+                    for (UInt64 h : hashes)
+                        hashes_for_bloom_filter->insert(h);
+
+                    if (!is_sampling_bloom_filter())
+                        finalize_bloom_filter_sampling();
+                }
+                else if (is_dedup_bloom_filter())
+                {
+                    chassert(hashes_for_bloom_filter.has_value());
+                    for (UInt64 h : hashes)
+                        hashes_for_bloom_filter->insert(h);
+                }
+                else if (is_direct_bloom_filter())
+                {
+                    updateBloomFilter(hashes, s.indexes, bloom_filter_num_blocks);
                 }
             }
 
@@ -1107,7 +1273,7 @@ void writeColumnImpl(
                 use_dictionary = false;
 
                 s.indexes = {};
-                /// (no need to clear hashes_for_bloom_filter)
+                reset_bloom_filter_state();
 
 #ifndef NDEBUG
                 /// Arrow's DictEncoderImpl destructor asserts that FlushValues() was called, so we
@@ -1133,6 +1299,9 @@ void writeColumnImpl(
     if (use_dictionary)
         flush_dict();
 
+    if (is_sampling_bloom_filter())
+        finalize_bloom_filter_sampling();
+
     chassert(data_offset == s.primitive_column->size());
 
     if (options.write_column_chunk_statistics)
@@ -1156,8 +1325,10 @@ void writeColumnImpl(
         addToEncodingsUsed(s, encoding);
     }
 
-    if (hashes_for_bloom_filter.has_value())
+    if (options.write_bloom_filter && hashes_for_bloom_filter.has_value())
         makeBloomFilter(*hashes_for_bloom_filter, s.indexes, options);
+    else if (options.write_bloom_filter)
+        writeBloomFilter(s.indexes);
 }
 
 }

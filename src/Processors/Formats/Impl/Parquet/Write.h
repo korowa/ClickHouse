@@ -69,6 +69,8 @@ struct WriteOptions
     ///    and flushed to the file when they become bigger than N bytes (to limit memory usage).
     size_t bloom_filter_flush_threshold_bytes = 1024 * 1024 * 128;
 
+    size_t bloom_filter_adaptive_sample_size = 65536;
+
     bool write_geometadata = true;
 };
 
