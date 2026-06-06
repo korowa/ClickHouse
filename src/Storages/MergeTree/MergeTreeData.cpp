@@ -6539,6 +6539,7 @@ void MergeTreeData::checkAlterPartitionIsPossible(
                 case MetadataStorageType::Local:
                 case MetadataStorageType::Keeper:
                 case MetadataStorageType::Memory:
+                case MetadataStorageType::Amateur:
                 {
                     can_execute_alter_on_disk = true;
                     break;

@@ -25,6 +25,8 @@ MetadataStorageType metadataTypeFromString(const String & type)
         return MetadataStorageType::Keeper;
     if (check_type == "memory")
         return MetadataStorageType::Memory;
+    if (check_type == "amateur")
+        return MetadataStorageType::Amateur;
 
     throw Exception(ErrorCodes::UNKNOWN_ELEMENT_IN_CONFIG,
                     "MetadataStorageFactory: unknown metadata storage type: {}", type);

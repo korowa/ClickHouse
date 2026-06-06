@@ -7,6 +7,7 @@
 #endif
 #include <Disks/DiskObjectStorage/MetadataStorages/Plain/MetadataStorageFromPlainObjectStorage.h>
 #include <Disks/DiskObjectStorage/MetadataStorages/PlainRewritable/MetadataStorageFromPlainRewritableObjectStorage.h>
+#include <Disks/DiskObjectStorage/MetadataStorages/Amateur/MetadataStorageFromAmateurObjectStorage.h>
 #include <Disks/DiskObjectStorage/MetadataStorages/Web/MetadataStorageFromStaticFilesWebServer.h>
 #include <Disks/DiskLocal.h>
 #include <Interpreters/Context.h>
@@ -224,6 +225,28 @@ static void registerMetadataStorageFromStaticFilesWebServer(MetadataStorageFacto
 
 void registerMetadataStorages();
 
+static void registerAmateurMetadataStorage(MetadataStorageFactory & factory)
+{
+    factory.registerMetadataStorageType("amateur", [](
+        const std::string & /*name*/,
+        const Poco::Util::AbstractConfiguration & config,
+        const std::string & config_prefix,
+        const ClusterConfigurationPtr & cluster,
+        const ObjectStorageRouterPtr & object_storages) -> MetadataStoragePtr
+    {
+        checkSingleLocation(cluster);
+
+        const auto local_object_storage = object_storages->takePointingTo(cluster->getLocalLocation());
+        std::string key_compatibility_prefix = getObjectKeyCompatiblePrefix(local_object_storage, config, config_prefix);
+        std::string zookeeper_name = config.getString(config_prefix + ".zookeeper_name", "default");
+        auto zookeeper = Context::getGlobalContextInstance()->getDefaultOrAuxiliaryZooKeeper(zookeeper_name);
+        std::string keeper_prefix = config.getString(config_prefix + ".keeper_prefix", key_compatibility_prefix);
+
+        return std::make_shared<MetadataStorageFromAmateurObjectStorage>(
+            local_object_storage, key_compatibility_prefix, zookeeper, keeper_prefix);
+    });
+}
+
 void registerMetadataStorages()
 {
     auto & factory = MetadataStorageFactory::instance();
@@ -234,6 +257,7 @@ void registerMetadataStorages()
 #if CLICKHOUSE_CLOUD
     registerMetadataStorageFromKeeper(factory);
 #endif
+    registerAmateurMetadataStorage(factory);
 }
 
 void MetadataStorageFactory::clearRegistry()
