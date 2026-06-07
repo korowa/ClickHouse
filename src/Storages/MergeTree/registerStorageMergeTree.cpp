@@ -5,6 +5,7 @@
 #include <Storages/MergeTree/extractZooKeeperPathFromReplicatedTableDef.h>
 #include <Storages/StorageFactory.h>
 #include <Storages/StorageMergeTree.h>
+#include <Storages/StorageAmateurMergeTree.h>
 #include <Storages/StorageReplicatedMergeTree.h>
 #include <Storages/TableZnodeInfo.h>
 
@@ -210,12 +211,20 @@ static bool isReplicated(const String & engine_name)
     return engine_name.starts_with("Replicated") && engine_name.ends_with("MergeTree");
 }
 
+static bool isAmateur(const String & engine_name)
+{
+    return engine_name.starts_with("Amateur") && engine_name.ends_with("MergeTree");
+}
+
 /// Returns the part of the name of a table engine between "Replicated" (if any) and "MergeTree".
 static std::string_view getNamePart(const String & engine_name)
 {
     std::string_view name_part = engine_name;
     if (name_part.starts_with("Replicated"))
         name_part.remove_prefix(strlen("Replicated"));
+
+    if (name_part.starts_with("Amateur"))
+        name_part.remove_prefix(strlen("Amateur"));
 
     if (name_part.ends_with("MergeTree"))
         name_part.remove_suffix(strlen("MergeTree"));
@@ -234,7 +243,7 @@ static TableZnodeInfo extractZooKeeperPathAndReplicaNameFromEngineArgs(
     LoadingStrictnessLevel mode,
     const ContextPtr & local_context)
 {
-    chassert(isReplicated(engine_name));
+    chassert(isReplicated(engine_name) || isAmateur(engine_name));
 
     bool is_extended_storage_def = engine_args.empty() || isExtendedStorageDef(query);
 
@@ -427,6 +436,7 @@ static StoragePtr create(const StorageFactory::Arguments & args)
     const Settings & local_settings = args.getLocalContext()->getSettingsRef();
 
     bool replicated = isReplicated(args.engine_name);
+    bool amateur = isAmateur(args.engine_name);
     std::string_view name_part = getNamePart(args.engine_name);
 
     MergeTreeData::MergingParams merging_params;
@@ -471,7 +481,7 @@ static StoragePtr create(const StorageFactory::Arguments & args)
         needed_params += "]";
     };
 
-    if (replicated)
+    if (replicated || amateur)
     {
         if (is_extended_storage_def)
         {
@@ -564,7 +574,7 @@ static StoragePtr create(const StorageFactory::Arguments & args)
     /// Extract zookeeper path and replica name from engine arguments.
     TableZnodeInfo zookeeper_info;
 
-    if (replicated)
+    if (replicated || amateur)
     {
         zookeeper_info = extractZooKeeperPathAndReplicaNameFromEngineArgs(
             args.query, args.table_id, args.engine_name, args.engine_args, args.mode, args.getLocalContext());
@@ -1060,6 +1070,32 @@ static StoragePtr create(const StorageFactory::Arguments & args)
             create_query_zk_retries_info);
     }
 
+    if (amateur)
+    {
+        bool need_check_table_structure = true;
+        if (auto txn = args.getLocalContext()->getZooKeeperMetadataTransaction())
+            need_check_table_structure = txn->isInitialQuery();
+
+        ZooKeeperRetriesInfo create_query_zk_retries_info{
+            local_settings[Setting::keeper_max_retries],
+            local_settings[Setting::keeper_retry_initial_backoff_ms],
+            local_settings[Setting::keeper_retry_max_backoff_ms],
+            args.getLocalContext()->getProcessListElementSafe()};
+
+        return std::make_shared<StorageAmateurMergeTree>(
+            zookeeper_info,
+            args.mode,
+            args.table_id,
+            args.relative_data_path,
+            metadata,
+            context,
+            date_column_name,
+            merging_params,
+            std::move(storage_settings),
+            need_check_table_structure,
+            create_query_zk_retries_info);
+    }
+
     return std::make_shared<StorageMergeTree>(
         args.table_id,
         args.relative_data_path,
@@ -1108,6 +1144,8 @@ void registerStorageMergeTree(StorageFactory & factory)
     factory.registerStorage("ReplicatedCoalescingMergeTree", create, features);
     factory.registerStorage("ReplicatedGraphiteMergeTree", create, features);
     factory.registerStorage("ReplicatedVersionedCollapsingMergeTree", create, features);
+
+    factory.registerStorage("AmateurMergeTree", create, features);
 }
 
 }

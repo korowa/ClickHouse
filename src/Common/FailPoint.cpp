@@ -187,7 +187,9 @@ static struct InitFiu
     REGULAR(wide_part_writer_fail_in_add_streams) \
     REGULAR(compact_part_writer_fail_in_add_streams) \
     REGULAR(transaction_force_unknown_state_after_commit) \
-    PAUSEABLE(transaction_after_commit_pause)
+    PAUSEABLE(transaction_after_commit_pause) \
+    ONCE(amateur_merge_commit_zk_fail_after_op) \
+    ONCE(amateur_merge_commit_zk_fail_before_op)
 
 namespace FailPoints
 {
