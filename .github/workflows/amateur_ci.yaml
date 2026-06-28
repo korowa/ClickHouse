@@ -1,0 +1,54 @@
+---
+name: AmateurCI
+
+on:
+  push:
+    branches: ['amateur-merge-tree']
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: "Build"
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/ccache
+          key: ccache-${{ github.sha }}
+          restore-keys: |
+            ccache-
+
+      - name: Build
+        run: |
+          docker run --rm -v $PWD:/ClickHouse -v /tmp/ccache:/tmp/ccache clickhouse/fasttest:b63954f8a1b316d0686e \
+            /bin/bash -c "
+              set -e
+              apt-get update && apt-get install -y ccache
+              export CC=clang-21
+              export CXX=clang++-21
+              export CCACHE_DIR=/tmp/ccache
+              cd /ClickHouse/
+              cmake -DCOMPILER_CACHE=ccache -DCMAKE_BUILD_TYPE=Debug -DOMIT_HEAVY_DEBUG_SYMBOLS=1 -DENABLE_LIBRARIES=0 -DENABLE_UTILS=0 -DENABLE_TESTS=0 -DENABLE_RUST=0 -DENABLE_JEMALLOC=1 -DENABLE_YAML_CPP=1 -DENABLE_AWS_S3=1 -G Ninja -S . -B build
+              ninja -C build
+              ccache --show-stats
+            "
+
+      - name: Save ccache
+        if: github.ref_name == 'amateur-merge-tree'
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/ccache
+          key: ccache-${{ github.sha }}
+
+      - name: Integration tests
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $PWD:$PWD --network host clickhouse/integration-tests-runner:c909f2e80ec78b3a6532 \
+            /bin/bash -c "
+              CLICKHOUSE_TESTS_SERVER_BIN_PATH=$PWD/build/programs/clickhouse \
+              pytest $PWD/tests/integration/test_amateur_merge_tree/ -v --timeout=600
+            "

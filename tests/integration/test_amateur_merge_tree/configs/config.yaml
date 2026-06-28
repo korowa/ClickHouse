@@ -1,0 +1,17 @@
+---
+storage_configuration:
+  disks:
+    s3:
+      type: object_storage
+      object_storage_type: s3
+      metadata_type: amateur
+      endpoint: http://minio1:9001/root/data/
+      keeper_prefix: /clickhouse/disks/s3
+      access_key_id: minio
+      secret_access_key: ClickHouse_Minio_P@ssw0rd
+  policies:
+    s3:
+      volumes:
+      - main:
+          disks:
+          - s3
