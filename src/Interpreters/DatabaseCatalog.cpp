@@ -1651,7 +1651,7 @@ void DatabaseCatalog::dropTableFinally(const TableMarkedAsDropped & table)
             continue;
 
         LOG_INFO(log, "Removing data directory {} of dropped table {} from disk {}", data_path, table.table_id.getNameForLogs(), disk_name);
-        disk->removeRecursive(data_path);
+        disk->removeSharedRecursive(data_path, true, {});
     }
 
     LOG_INFO(log, "Removing metadata {} of dropped table {}", table.metadata_path, table.table_id.getNameForLogs());
